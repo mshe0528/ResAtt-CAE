@@ -1,0 +1,268 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import os
+
+# 设置高质量图形参数
+mpl.rcParams['font.size'] = 10
+mpl.rcParams['font.family'] = 'Arial'
+mpl.rcParams['axes.labelsize'] = 12
+mpl.rcParams['axes.titlesize'] = 14
+mpl.rcParams['xtick.labelsize'] = 10
+mpl.rcParams['ytick.labelsize'] = 10
+
+
+def read_mt_data(file_path):
+    """
+    读取MT数据文件
+    返回: Hx, Hy, Ex, Ey 数组
+    """
+    # 从文件加载数据
+    data = np.genfromtxt(file_path)
+
+    # 提取各分量 (0-indexed)
+    Hx = data[:, 6]  # 第7列
+    Hy = data[:, 7]  # 第8列
+    Ex = data[:, 13]  # 第14列
+    Ey = data[:, 14]  # 第15列
+
+    return Hx, Hy, Ex, Ey
+
+
+def calculate_polarization_angles(Ex, Ey, Hx, Hy):
+    """
+    计算电场和磁场的极化方向角
+    返回: 角度数组(单位:度)和方向统计
+    """
+    # 计算方向角
+    theta_E = np.degrees(np.arctan2(Ey, Ex))  # 电场方向角
+    theta_H = np.degrees(np.arctan2(Hy, Hx))  # 磁场方向角
+
+    # 转换为0-360度范围
+    theta_E = np.where(theta_E < 0, theta_E + 360, theta_E)
+    theta_H = np.where(theta_H < 0, theta_H + 360, theta_H)
+
+    # 计算统计值
+    stats = {
+        'E_mean': np.mean(theta_E),
+        'H_mean': np.mean(theta_H),
+        'E_std': np.std(theta_E),
+        'H_std': np.std(theta_H),
+        'E_minmax': (np.min(theta_E), np.max(theta_E)),
+        'H_minmax': (np.min(theta_H), np.max(theta_H)),
+        'num_points': len(theta_E)
+    }
+
+    return theta_E, theta_H, stats
+
+
+def plot_polarization_rose(theta, title, color, stats=None, bin_size=10, save_dir='output'):
+    """
+    绘制极化方向玫瑰图
+    """
+    # 创建分箱
+    bins = np.arange(0, 361, bin_size)
+    hist, bin_edges = np.histogram(theta, bins=bins)
+
+    # 计算频率百分比
+    freq_percent = hist / len(theta) * 100
+
+    # 设置颜色映射
+    cmap = plt.cm.coolwarm if 'E' in title else plt.cm.viridis
+    bar_colors = cmap(np.linspace(0.3, 0.8, len(hist)))
+
+    # 创建极坐标图
+    fig = plt.figure(figsize=(10, 8), dpi=120)
+    ax = fig.add_subplot(111, polar=True, facecolor='whitesmoke')
+
+    # 绘图参数
+    width = np.deg2rad(bin_size)
+    theta_rad = np.deg2rad(bins[:-1])
+    max_percent = np.max(freq_percent)
+
+    # 绘制条形
+    bars = ax.bar(
+        theta_rad, freq_percent,
+        width=width,
+        bottom=0,
+        color=bar_colors,
+        edgecolor='k',
+        linewidth=0.5,
+        alpha=0.85
+    )
+
+    # 自定义网格和标签
+    ax.set_theta_zero_location('N')  # 0度指向北
+    ax.set_theta_direction(-1)  # 顺时针方向
+    ax.set_rgrids(np.arange(0, max_percent + 1, max_percent / 4),
+                  labels=[f'{x:.1f}%' for x in np.arange(0, max_percent + 1, max_percent / 4)],
+                  fontsize=9)
+
+    # 添加方向标签
+    ax.set_xticks(np.deg2rad([0, 30,60,90,120,150, 180,210,240, 270,300,330]))
+    ax.set_xticklabels(['N','NNE','NEE', 'E','SEE','SSE', 'S','SSW','SWW', 'W','NWW','NNW'], fontsize=10)
+
+    # 添加标题
+    plt.title(title, fontsize=14, fontweight='bold', pad=20)
+
+    # 添加数据统计信息
+    if stats:
+        text_str = (
+            f'Mean Direction: {stats["mean"]:.1f}°\n'
+            f'St. Dev: {stats["std"]:.1f}°\n'
+            f'Range: {stats["minmax"][0]:.1f}°-{stats["minmax"][1]:.1f}°\n'
+            f'Points: {stats["num_points"]}'
+        )
+        plt.figtext(0.75, 0.15, text_str, bbox=dict(facecolor='white', alpha=0.7))
+
+    # 添加颜色条
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=360))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, pad=0.1)
+    cbar.set_label('Direction (°)', fontsize=10)
+
+    # 保存图像
+    os.makedirs(save_dir, exist_ok=True)
+    filename = title.lower().replace(' ', '_').replace('(', '').replace(')', '') + '.png'
+    plt.savefig(os.path.join(save_dir, filename), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    return os.path.join(save_dir, filename)
+
+
+def generate_polarization_report(file_path, bin_size=10):
+    """
+    处理MT数据并生成极化方向玫瑰图报告
+    """
+    # 读取数据
+    Hx, Hy, Ex, Ey = read_mt_data(file_path)
+
+    # 计算极化方向
+    theta_E, theta_H, stats = calculate_polarization_angles(Ex, Ey, Hx, Hy)
+
+    # 准备统计信息
+    e_stats = {
+        'mean': stats['E_mean'],
+        'std': stats['E_std'],
+        'minmax': stats['E_minmax'],
+        'num_points': stats['num_points']
+    }
+
+    h_stats = {
+        'mean': stats['H_mean'],
+        'std': stats['H_std'],
+        'minmax': stats['H_minmax'],
+        'num_points': stats['num_points']
+    }
+
+    # 创建输出目录
+    output_dir = os.path.join(os.path.dirname(file_path), 'polarization_analysis')
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 生成电场极化玫瑰图
+    e_plot_path = plot_polarization_rose(
+        theta_E,
+        title='Electric Field Polarization Direction',
+        color='blue',
+        stats=e_stats,
+        bin_size=bin_size,
+        save_dir=output_dir
+    )
+
+    # 生成磁场极化玫瑰图
+    h_plot_path = plot_polarization_rose(
+        theta_H,
+        title='Magnetic Field Polarization Direction',
+        color='red',
+        stats=h_stats,
+        bin_size=bin_size,
+        save_dir=output_dir
+    )
+
+    # 生成数据质量报告
+    quality_report = generate_quality_report(e_stats, h_stats)
+
+    return e_plot_path, h_plot_path, quality_report
+
+
+def generate_quality_report(e_stats, h_stats):
+    """
+    生成MT数据质量评估报告
+    """
+    quality_messages = []
+
+    # 评估电场质量
+    if e_stats['std'] < 5:
+        e_quality = "Excellent"
+    elif e_stats['std'] < 10:
+        e_quality = "Good"
+    elif e_stats['std'] < 20:
+        e_quality = "Fair"
+    else:
+        e_quality = "Poor"
+
+    quality_messages.append(f"⚡ Electric Field Direction Quality: {e_quality}")
+    quality_messages.append(f"  - Direction: Mean = {e_stats['mean']:.1f}°, Std Dev = {e_stats['std']:.1f}°")
+    quality_messages.append(f"  - Range: {e_stats['minmax'][0]:.1f}° to {e_stats['minmax'][1]:.1f}°")
+
+    # 评估磁场质量
+    if h_stats['std'] < 0.5:
+        h_quality = "Excellent"
+    elif h_stats['std'] < 2:
+        h_quality = "Good"
+    elif h_stats['std'] < 5:
+        h_quality = "Fair"
+    else:
+        h_quality = "Poor"
+
+    quality_messages.append(f"\n🧲 Magnetic Field Direction Quality: {h_quality}")
+    quality_messages.append(f"  - Direction: Mean = {h_stats['mean']:.1f}°, Std Dev = {h_stats['std']:.1f}°")
+    quality_messages.append(f"  - Range: {h_stats['minmax'][0]:.1f}° to {h_stats['minmax'][1]:.1f}°")
+
+    # 整体质量评估
+    if "Poor" in e_quality or "Poor" in h_quality:
+        overall_quality = "⚠️ Low Quality - Significant noise detected"
+        recommendation = ("Recommendations:\n"
+                          "1. Inspect raw time series for transient noise\n"
+                          "2. Apply bandpass filtering\n"
+                          "3. Consider removing corrupted time segments")
+    elif "Fair" in e_quality or "Fair" in h_quality:
+        overall_quality = "⚠️ Moderate Quality - Some noise present"
+        recommendation = ("Recommendations:\n"
+                          "1. Apply selective filtering\n"
+                          "2. Increase stacking for noise reduction\n"
+                          "3. Verify sensor coupling")
+    else:
+        overall_quality = "✅ High Quality - Minimal noise detected"
+        recommendation = "Data quality is sufficient for analysis"
+
+    quality_messages.append(f"\nOverall Data Quality: {overall_quality}")
+    quality_messages.append(f"\n{recommendation}")
+
+    return "\n".join(quality_messages)
+
+
+# 主程序
+if __name__ == "__main__":
+    # 设置参数
+    MT_DATA_FILE = "D:/LMTlongmenshan_data/compare/longmens_36_100/all/all.txt"  # 替换为你的数据文件路径
+    BIN_SIZE = 15  # 玫瑰图的分箱大小（度）
+
+    # 处理数据并生成图形
+    e_plot, h_plot, report = generate_polarization_report(MT_DATA_FILE, bin_size=BIN_SIZE)
+
+    # 打印结果
+    print("=" * 80)
+    print("MT DATA POLARIZATION ANALYSIS REPORT")
+    print("=" * 80)
+    print(f"Data file processed: {MT_DATA_FILE}")
+    print(f"Number of points: {len(np.genfromtxt(MT_DATA_FILE))}")
+    print("\nElectric field polarization plot saved to:")
+    print(f"  {e_plot}")
+    print("\nMagnetic field polarization plot saved to:")
+    print(f"  {h_plot}")
+    print("\n" + "-" * 80)
+    print("DATA QUALITY ASSESSMENT:")
+    print("-" * 80)
+    print(report)
+    print("=" * 80)
