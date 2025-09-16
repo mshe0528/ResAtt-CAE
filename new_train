@@ -1,0 +1,279 @@
+# # import argparse
+# # import time
+# # import torch
+# # from utils import LTMDataset
+# # from models import DAE_Trainer
+# # from torch.utils.data import Dataset, DataLoader
+# #
+# # def main():
+# #     parser = argparse.ArgumentParser(description='Train DAE models')
+# #     parser.add_argument('--data_path', type=str, required=True)
+# #     parser.add_argument('--output_dir', type=str, default='./models')
+# #     parser.add_argument('--epochs', type=int, default=100)
+# #     parser.add_argument('--batch_size', type=int, default=256)
+# #     args = parser.parse_args()
+# #
+# #     # 分通道训练
+# #     for channel in range(3):
+# #         print(f"\nTraining Channel {channel}...")
+# #         dataset = LTMDataset(args.data_path, [channel])
+# #         train_size = int(0.8 * len(dataset))
+# #         val_size = len(dataset) - train_size
+# #         train_set, val_set = torch.utils.data.random_split(
+# #             dataset, [train_size, val_size])
+# #
+# #         train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
+# #         val_loader = DataLoader(val_set, batch_size=args.batch_size)
+# #
+# #         trainer = DAE_Trainer(channel)
+# #         best_loss = float('inf')
+# #         patience_counter = 0
+# #
+# #         for epoch in range(args.epochs):
+# #             start_time = time.time()
+# #             train_loss = trainer.train_epoch(train_loader)
+# #             val_loss = trainer.validate(val_loader)
+# #             trainer.scheduler.step(val_loss)
+# #
+# #             # 早停机制
+# #             if val_loss < best_loss:
+# #                 best_loss = val_loss
+# #                 patience_counter = 0
+# #                 torch.save(trainer.model.state_dict(),
+# #                            f"{args.output_dir}/channel_{channel}_best.pth")
+# #             else:
+# #                 patience_counter += 1
+# #                 if patience_counter >= 10:
+# #                     print(f"Early stopping at epoch {epoch}")
+# #                     break
+# #
+# #             print(f"Epoch {epoch + 1}/{args.epochs} | "
+# #                   f"Time: {time.time() - start_time:.1f}s | "
+# #                   f"Train Loss: {train_loss:.4f} | "
+# #                   f"Val Loss: {val_loss:.4f}")
+# #
+# #
+# # if __name__ == "__main__":
+# #     main()
+# import argparse
+# import os
+# import glob
+# import time
+# import torch
+# from torch.utils.data import DataLoader
+# from models import DAE_Trainer
+# from utils import LTMDataset
+#
+#
+# def main():
+#     parser = argparse.ArgumentParser(description='多文件电磁数据去噪训练')
+#     parser.add_argument('--data_path', type=str, required=True,
+#                         help="输入路径可以是：1) 单个文件 2) 包含多个txt的目录 3) 通配符模式")
+#     parser.add_argument('--output_dir', type=str, default='./models')
+#     parser.add_argument('--epochs', type=int, default=100)
+#     parser.add_argument('--batch_size', type=int, default=512)
+#     parser.add_argument('--window_size', type=int, default=64,
+#                         help="时间窗口长度")
+#     parser.add_argument('--stride', type=int, default=32,
+#                         help="滑动窗口步长")
+#     args = parser.parse_args()
+#
+#     # 解析输入路径
+#     if os.path.isdir(args.data_path):
+#         data_files = glob.glob(os.path.join(args.data_path, "*.txt"))
+#     elif "*" in args.data_path:
+#         data_files = glob.glob(args.data_path)
+#     else:
+#         data_files = [args.data_path]
+#
+#     if not data_files:
+#         raise ValueError("未找到有效的输入文件")
+#
+#     print(f"加载到 {len(data_files)} 个数据文件")
+#
+#     # 分通道训练
+#     for channel in range(3):
+#         print(f"\n=== 正在训练通道 {channel} (HX/HY/HZ) ===")
+#
+#         # 初始化数据集
+#         dataset = LTMDataset(
+#             data_files=data_files,
+#             target_channels=[channel],
+#             window_size=args.window_size,
+#             stride=args.stride
+#         )
+#
+#         # 划分训练集和验证集
+#         train_size = int(0.8 * len(dataset))
+#         val_size = len(dataset) - train_size
+#         train_set, val_set = torch.utils.data.random_split(
+#             dataset, [train_size, val_size],
+#             generator=torch.Generator().manual_seed(42)
+#         )
+#
+#         # 创建数据加载器
+#         train_loader = DataLoader(
+#             train_set,
+#             batch_size=args.batch_size,
+#             shuffle=True,
+#             num_workers=2,
+#             pin_memory=True
+#         )
+#         val_loader = DataLoader(
+#             val_set,
+#             batch_size=args.batch_size * 2,
+#             num_workers=2
+#         )
+#
+#         # 初始化训练器
+#         trainer = DAE_Trainer(channel=channel)
+#         best_loss = float('inf')
+#         patience_counter = 0
+#
+#         # 训练循环
+#         for epoch in range(args.epochs):
+#             start_time = time.time()
+#
+#             # 训练阶段
+#             train_loss = trainer.train_epoch(train_loader)
+#
+#             # 验证阶段
+#             val_loss = trainer.validate(val_loader)
+#             trainer.scheduler.step(val_loss)
+#
+#             # 早停机制
+#             if val_loss < best_loss:
+#                 best_loss = val_loss
+#                 patience_counter = 0
+#                 torch.save(
+#                     trainer.model.state_dict(),
+#                     os.path.join(args.output_dir, f"channel_{channel}_best.pth")
+#                 )
+#             else:
+#                 patience_counter += 1
+#                 if patience_counter >= 10:
+#                     print(f"通道 {channel} 在第 {epoch + 1} 轮触发早停")
+#                     break
+#
+#             # 打印进度
+#             epoch_time = time.time() - start_time
+#             print(f"Epoch {epoch + 1:03d}/{args.epochs} | "
+#                   f"耗时: {epoch_time:.1f}s | "
+#                   f"训练损失: {train_loss:.4f} | "
+#                   f"验证损失: {val_loss:.4f}")
+#
+#
+# if __name__ == "__main__":
+#     main()
+import argparse
+import os
+import glob
+import time
+import torch
+from torch.utils.data import DataLoader, random_split
+from utils import LTMDataset, plot_noise_comparison
+from models import DAE_Trainer
+import numpy as np
+from tqdm import tqdm
+def main():
+    parser = argparse.ArgumentParser(description='噪声增强训练')
+    parser.add_argument('--data_path', type=str, required=True)
+    parser.add_argument('--output_dir', type=str, default='./models/with_noise_model4')
+    parser.add_argument('--epochs', type=int, default=250)
+    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--window', type=int, default=1024,
+                        help="窗口长度（建议1-120秒，1Hz采样对应128点）")
+    parser.add_argument('--stride', type=int, default=256)
+    args = parser.parse_args()
+
+    # 数据加载
+    data_files = glob.glob(args.data_path) if '*' in args.data_path else \
+        [args.data_path] if os.path.isfile(args.data_path) else \
+            glob.glob(os.path.join(args.data_path, "*.txt"))
+
+    # 分通道训练
+    for ch in range(3):
+        print(f"\n=== 训练通道 {ch} (噪声增强模式) ===")
+
+        # 创建含噪声的训练集和干净验证集
+        full_dataset = LTMDataset(
+            data_files=data_files,
+            target_channels=[ch],
+            window_size=args.window,
+            stride=args.stride,
+            mode='train'
+        )
+
+        # 可视化噪声示例
+        sample_idx = np.random.randint(len(full_dataset))
+        clean_sample = full_dataset[sample_idx][1].numpy()
+        noisy_sample = full_dataset[sample_idx][0].numpy()
+        plot_noise_comparison(clean_sample, noisy_sample,
+                              f"noise_example_ch{ch}.png")
+
+        # 划分数据集
+        train_size = int(0.9 * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+        train_set, val_set = random_split(full_dataset, [train_size, val_size])
+
+        # 数据加载器
+        train_loader = DataLoader(
+            train_set,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=2,
+            pin_memory=True
+        )
+        val_loader = DataLoader(
+            val_set,
+            batch_size=args.batch_size * 2,
+            num_workers=2
+        )
+
+        # 初始化训练器
+        trainer = DAE_Trainer(channel=ch, input_size=args.window)
+        best_loss = float('inf')
+        patience = 0
+
+        # 训练循环
+        for epoch in range(args.epochs):
+            start = time.time()
+
+            # 训练阶段（带噪声）
+            train_loss = trainer.train_epoch(train_loader)
+
+            # 验证阶段（干净数据）
+            val_loss = trainer.validate(val_loader)
+        # for epoch in tqdm(range(args.epochs), desc='Total Progress', position=0):
+        #     start = time.time()
+        #
+        #     # 训练阶段带进度条
+        #     train_bar = tqdm(train_loader, desc=f'Epoch {epoch + 1}/{args.epochs} Train', leave=False, position=1)
+        #     train_loss = trainer.train_epoch(train_bar)  # 修改train_epoch参数
+        #
+        #     # 验证阶段带进度条
+        #     val_bar = tqdm(val_loader, desc=f'Epoch {epoch + 1}/{args.epochs} Val', leave=False, position=2)
+        #     val_loss = trainer.validate(val_bar)  # 修改validate参数
+
+            trainer.scheduler.step(val_loss)
+
+            # 早停机制
+            if val_loss < best_loss:
+                best_loss = val_loss
+                patience = 0
+                torch.save(trainer.model.state_dict(),
+                           f"{args.output_dir}/noisy_ch{ch}_best.pth")
+            else:
+                patience += 1
+                if patience >= 15:
+                    print(f"通道{ch} 早停于第{epoch}轮")
+                    break
+
+            # 进度输出
+            print(f"Epoch {epoch + 1:03d} | "
+                  f"Train: {train_loss:.4f} | Val: {val_loss:.4f} | "
+                  f"Time: {time.time() - start:.1f}s")
+
+
+if __name__ == "__main__":
+    main()
