@@ -1,0 +1,341 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import matplotlib as mpl
+import random
+
+# 配置Matplotlib使用Agg后端（避免GUI依赖）
+mpl.use('Agg')
+
+
+def add_step_noise(data, step_ratio=0.1, min_step_duration=20, max_step_duration=500, min_step_size=0.05,
+                   max_step_size=0.5):
+    """
+    添加阶跃噪声到数据中，模拟大地电磁数据中的阶跃噪声
+    参数:
+        data: 原始数据
+        step_ratio: 有阶跃的数据点占总数据点的比例
+        min_step_duration: 最小阶跃持续时间
+        max_step_duration: 最大阶跃持续时间
+        min_step_size: 最小阶跃幅度（数据范围的百分比）
+        max_step_size: 最大阶跃幅度（数据范围的百分比）
+    """
+    # 复制原始数据，避免修改原始数据
+    noisy_data = data.copy()
+    data_min = np.min(data)
+    data_max = np.max(data)
+    data_range = data_max - data_min
+
+    # 计算阶跃点数
+    num_steps = int(step_ratio * len(data))
+
+    # 如果数据范围太小，使用绝对大小而不是相对大小
+    if data_range < 0.01:
+        use_absolute = True
+        min_step_size = min_step_size * 0.01  # 小数据的步长调整
+        max_step_size = max_step_size * 0.01  # 小数据的步长调整
+    else:
+        use_absolute = False
+
+    # 设置阶跃起点
+    step_positions = []
+    current_pos = 0
+
+    while current_pos < len(data) and len(step_positions) < num_steps:
+        # 确保有足够的数据来应用阶跃
+        step_size = random.randint(min_step_duration, max_step_duration)
+        if current_pos + step_size > len(data):
+            break
+
+        step_positions.append((current_pos, step_size))
+        current_pos += step_size
+
+    # 应用阶跃变化
+    cumulative_shift = 0
+    for start, duration in step_positions:
+        # 随机决定阶跃方向（向上或向下）
+        direction = 1 if random.random() > 0.5 else -1
+
+        # 计算阶跃幅度
+        if use_absolute:
+            step_magnitude = random.uniform(min_step_size, max_step_size)
+        else:
+            relative_size = random.uniform(min_step_size, max_step_size)
+            step_magnitude = direction * relative_size * data_range
+
+        # 应用阶跃
+        noisy_data[start:start + duration] += cumulative_shift + step_magnitude
+        cumulative_shift += step_magnitude
+
+    return noisy_data
+
+
+def create_pure_curve_eps(data, filename, save_dir, is_original=True):
+    """
+    创建仅包含曲线的EPS文件，无任何文本、坐标轴或网格元素
+
+    参数:
+        data: 要绘制的数据
+        filename: 输出文件名
+        save_dir: 保存目录
+        is_original: 是否为原始数据（用于颜色选择）
+    """
+    # 创建图形对象，设置尺寸比例为宽屏（16:9）
+    fig = plt.figure(figsize=(16, 9), dpi=300)
+    ax = fig.add_subplot(111)
+
+    # 设置颜色
+    color = '#1f77b4' if is_original else '#d62728'
+
+    # 绘制曲线 - 无其他元素
+    ax.plot(data, color=color, linewidth=1.5)
+
+    # === 关键设置：移除所有非曲线元素 ===
+    # 移除所有坐标轴
+    ax.axis('off')
+
+    # 移除所有边框
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    # 移除所有刻度线
+    ax.tick_params(axis='both', which='both', length=0)
+
+    # 移除网格
+    ax.grid(False)
+
+    # 移除标题和标签
+    ax.set_title('')
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+
+    # 设置纯白色背景
+    fig.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    # 确保无透明通道
+    ax.patch.set_alpha(1.0)
+    fig.patch.set_alpha(1.0)
+
+    # 填充整个图像区域（无边距）
+    plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
+
+    # 创建保存目录（如果不存在）
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    # 确保文件名正确（EPS格式）
+    if not filename.lower().endswith('.eps'):
+        filename = os.path.splitext(filename)[0] + '.eps'
+
+    # 创建完整文件路径
+    save_path = os.path.join(save_dir, filename)
+
+    # 保存为EPS格式 - 仅包含曲线
+    try:
+        plt.savefig(
+            save_path,
+            format='eps',
+            bbox_inches='tight',
+            pad_inches=0,  # 无边距
+            dpi=300,
+            facecolor='white',  # 白色背景
+            edgecolor='none',
+            orientation='portrait',
+            transparent=False
+        )
+        print(f"成功保存为仅含曲线的EPS文件: {save_path}")
+    except Exception as e:
+        print(f"保存EPS失败: {str(e)}")
+        # 尝试保存为PDF作为备选
+        pdf_path = save_path.replace('.eps', '.pdf')
+        plt.savefig(
+            pdf_path,
+            format='pdf',
+            bbox_inches='tight',
+            pad_inches=0,
+            dpi=300,
+            facecolor='white',
+            edgecolor='none',
+            transparent=False
+        )
+        print(f"已保存为PDF文件作为备选: {pdf_path}")
+        save_path = pdf_path
+    finally:
+        plt.close(fig)
+
+    return save_path
+
+
+def process_mt_data(file_path, skip=0, show_samples=1000, step_params=None, save_dir=None):
+    """处理大地电磁数据并生成仅含曲线的矢量图"""
+    step_params = step_params or {
+        'step_ratio': 0.1,
+        'min_step_duration': 20,
+        'max_step_duration': 500,
+        'min_step_size': 0.05,
+        'max_step_size': 0.5
+    }
+
+    try:
+        save_dir = save_dir or os.path.dirname(file_path)
+        os.makedirs(save_dir, exist_ok=True)
+
+        # 加载数据
+        print(f"\n加载数据: {file_path}")
+        print(f"跳过前 {skip} 行, 读取 {show_samples} 行数据...")
+
+        # 使用通用方法读取数据
+        df = pd.read_csv(
+            file_path,
+            sep=r'\s+',  # 匹配任意空白字符作为分隔符
+            header=None,
+            engine='python',
+            skiprows=skip,
+            nrows=show_samples
+        )
+        print(f"成功加载 {len(df)} 行数据")
+
+        # 目标列配置（简洁名称）
+        channel_mapping = {
+            6: "HX",
+            7: "HY",
+            8: "HZ",
+            11: "EX",
+            12: "EY"
+        }
+
+        # 处理每个通道
+        for col_idx, col_name in channel_mapping.items():
+            if col_idx >= df.shape[1]:
+                print(f"警告: 列索引 {col_idx} 超出数据范围 (最大列数: {df.shape[1]}), 跳过")
+                continue
+
+            print(f"\n处理通道: {col_name} (列 {col_idx + 1})")
+
+            # 提取并清理数据
+            orig_data = df.iloc[:, col_idx]
+
+            # 处理可能的字符串数据
+            if orig_data.dtype == object:
+                try:
+                    orig_data = pd.to_numeric(orig_data, errors='coerce')
+                except:
+                    # 如果转换失败，生成随机数据
+                    print("  处理数值转换问题，使用随机数据替代")
+                    orig_data = np.random.randn(len(orig_data))
+
+            # 处理缺失值
+            nan_count = orig_data.isna().sum()
+            if nan_count > 0:
+                print(f"  发现 {nan_count} 个缺失值, 使用中位数填充")
+                median_val = orig_data.median()
+                orig_data.fillna(median_val, inplace=True)
+
+            # 获取数据范围用于缩放
+            data_min = np.min(orig_data.values)
+            data_max = np.max(orig_data.values)
+            data_range = data_max - data_min
+
+            # 如果数据范围太小，进行缩放避免过小的曲线
+            if data_range < 0.01:
+                scaled_data = (orig_data.values - data_min) * 100
+            else:
+                scaled_data = orig_data.values
+
+            # 生成仅含曲线的原始数据EPS文件
+            orig_filename = f"{col_name}_original.eps"
+
+            orig_save_path = create_pure_curve_eps(
+                data=scaled_data,
+                filename=orig_filename,
+                save_dir=save_dir,
+                is_original=True
+            )
+
+            # 添加阶跃噪声
+            noisy_data = add_step_noise(orig_data.values, **step_params)
+
+            # 生成仅含曲线的噪声数据EPS文件
+            noisy_filename = f"{col_name}_step_noise.eps"
+
+            noisy_save_path = create_pure_curve_eps(
+                data=noisy_data,
+                filename=noisy_filename,
+                save_dir=save_dir,
+                is_original=False
+            )
+
+        print(f"\n处理完成! 仅含曲线的矢量图已保存到目录: {save_dir}")
+
+        return save_dir
+
+    except Exception as e:
+        print(f"处理过程中发生错误: {str(e)}")
+        return None
+
+
+# 主程序
+if __name__ == "__main__":
+    # 配置路径
+    file_path = 'D:/LMTlongmenshan_data/yanyuan/X460/all.txt'
+    save_dir = 'D:/LMTlongmenshan_data/yanyuan/X460/step_noise_results'
+
+    print("\n" + "=" * 60)
+    print("大地电磁数据阶跃噪声处理工具 - 仅含曲线矢量图生成")
+    print("=" * 60)
+    print("说明: 此版本将生成仅包含数据曲线的EPS文件")
+    print("      无文本、坐标轴、网格或其他元素")
+    print("      并添加大地电磁数据中常见的阶跃噪声")
+    print("=" * 60)
+
+    try:
+        # 获取用户输入
+        skip_input = input("\n输入跳过的样本数 (默认为0): ")
+        skip = int(skip_input) if skip_input.strip() != "" else 0
+
+        show_samples_input = input("输入处理的样本数 (默认为1000): ")
+        show_samples = int(show_samples_input) if show_samples_input.strip() != "" else 1000
+
+        # 阶跃噪声参数输入
+        step_ratio_input = input("输入阶跃噪声比例 (0.01-0.5, 默认为0.1): ")
+        step_ratio = float(step_ratio_input) if step_ratio_input.strip() != "" else 0.1
+
+        min_step_duration_input = input("输入最小阶跃持续时间 (10-1000, 默认为20): ")
+        min_step_duration = int(min_step_duration_input) if min_step_duration_input.strip() != "" else 20
+
+        max_step_duration_input = input("输入最大阶跃持续时间 (50-2000, 默认为500): ")
+        max_step_duration = int(max_step_duration_input) if max_step_duration_input.strip() != "" else 500
+
+        min_step_size_input = input("输入最小阶跃幅度百分比 (0.01-1.0, 默认为0.05): ")
+        min_step_size = float(min_step_size_input) if min_step_size_input.strip() != "" else 0.05
+
+        max_step_size_input = input("输入最大阶跃幅度百分比 (0.1-5.0, 默认为0.5): ")
+        max_step_size = float(max_step_size_input) if max_step_size_input.strip() != "" else 0.5
+
+        # 处理数据
+        result_dir = process_mt_data(
+            file_path=file_path,
+            skip=skip,
+            show_samples=show_samples,
+            step_params={
+                'step_ratio': step_ratio,
+                'min_step_duration': min_step_duration,
+                'max_step_duration': max_step_duration,
+                'min_step_size': min_step_size,
+                'max_step_size': max_step_size
+            },
+            save_dir=save_dir
+        )
+
+        if result_dir:
+            print(f"\n处理完成! 请检查输出目录中的曲线文件: {result_dir}")
+            print("这些文件仅包含数据曲线本身，无其他元素")
+
+    except ValueError as ve:
+        print(f"\n输入错误: {str(ve)}")
+    except Exception as e:
+        print(f"\n程序遇到意外错误: {str(e)}")
+
+    print("\n程序结束")
