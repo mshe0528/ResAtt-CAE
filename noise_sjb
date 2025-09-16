@@ -1,0 +1,264 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import matplotlib as mpl
+from scipy import stats
+
+# 配置Matplotlib使用Agg后端（避免GUI依赖）
+mpl.use('Agg')
+
+
+def add_triangle_wave_noise(data, n_waves=10, wave_width=50, amplitude=10000):
+    """添加三角波噪声：在原始数据基础上添加三角形尖峰噪声"""
+    noisy_data = data.copy().astype(float)
+    n_samples = len(data)
+
+    # 计算全局平均作为基准
+    baseline = np.mean(data)
+
+    # 确保噪声宽度合理
+    wave_width = max(10, min(wave_width, int(n_samples / 10)))
+
+    for _ in range(n_waves):
+        # 随机选择噪声位置
+        start_idx = np.random.randint(0, n_samples - wave_width)
+
+        # 随机选择噪声极性
+        sign = np.random.choice([-1, 1])
+
+        # 创建三角波
+        peak_value = amplitude * sign
+        triangle_wave = np.zeros(wave_width)
+
+        # 前半部分：线性上升/下降
+        rising_falling = wave_width // 2
+        triangle_wave[:rising_falling] = np.linspace(0, peak_value, rising_falling)
+
+        # 后半部分：线性下降/上升
+        triangle_wave[rising_falling:] = np.linspace(peak_value, 0, wave_width - rising_falling)
+
+        # 将三角波噪声加到原始数据上
+        noisy_data[start_idx:start_idx + wave_width] += triangle_wave
+
+        # 确保两端平滑过渡
+        if start_idx > 0:
+            noisy_data[start_idx] = (noisy_data[start_idx - 1] + noisy_data[start_idx]) / 2
+        if start_idx + wave_width < n_samples:
+            noisy_data[start_idx + wave_width - 1] = (noisy_data[start_idx + wave_width - 1] + noisy_data[
+                start_idx + wave_width]) / 2
+
+    return noisy_data
+
+
+def create_pure_curve_eps(data, filename, save_dir, is_original=True):
+    """
+    创建仅包含曲线的EPS文件，无任何文本、坐标轴或网格元素
+
+    参数:
+        data: 要绘制的数据
+        filename: 输出文件名
+        save_dir: 保存目录
+        is_original: 是否为原始数据（用于颜色选择）
+    """
+    # 创建图形对象，设置尺寸
+    fig = plt.figure(figsize=(16, 9))
+    ax = fig.add_subplot(111)
+
+    # 设置颜色
+    color = '#1f77b4' if is_original else '#d62728'
+
+    # 绘制曲线 - 无其他元素
+    ax.plot(data, color=color, linewidth=1.5)
+
+    # === 关键设置：移除所有非曲线元素 ===
+    # 移除所有坐标轴
+    ax.axis('off')
+
+    # 移除所有边框
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    # 移除所有刻度线
+    ax.tick_params(axis='both', which='both', length=0)
+
+    # 移除网格
+    ax.grid(False)
+
+    # 移除标题和标签
+    ax.set_title('')
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+
+    # 设置纯白色背景
+    fig.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    # 确保无透明通道
+    ax.patch.set_alpha(1.0)
+    fig.patch.set_alpha(1.0)
+
+    # 填充整个图像区域（无边距）
+    plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
+
+    # 创建保存目录（如果不存在）
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    # 确保文件名正确（EPS格式）
+    if not filename.lower().endswith('.eps'):
+        filename = os.path.splitext(filename)[0] + '.eps'
+
+    # 创建完整文件路径
+    save_path = os.path.join(save_dir, filename)
+
+    # 保存为EPS格式 - 仅包含曲线
+    try:
+        plt.savefig(
+            save_path,
+            format='eps',
+            bbox_inches='tight',
+            pad_inches=0,  # 无边距
+            dpi=300,
+            facecolor='white',  # 白色背景
+            edgecolor='none',
+            orientation='portrait',
+            transparent=False
+        )
+        print(f"成功保存为仅含曲线的EPS文件: {save_path}")
+    except Exception as e:
+        print(f"保存EPS失败: {str(e)}")
+        # 尝试保存为PDF作为备选
+        pdf_path = save_path.replace('.eps', '.pdf')
+        plt.savefig(
+            pdf_path,
+            format='pdf',
+            bbox_inches='tight',
+            pad_inches=0,
+            dpi=300,
+            facecolor='white',
+            edgecolor='none',
+            transparent=False
+        )
+        print(f"已保存为PDF文件作为备选: {pdf_path}")
+        save_path = pdf_path
+    finally:
+        plt.close(fig)
+
+    return save_path
+
+
+def process_mt_data(file_path, skip=0, show_samples=1000, wave_params=None, save_dir=None):
+    """处理数据并生成仅含曲线的EPS文件"""
+    if wave_params is None:
+        wave_params = {
+            'n_waves': 5,  # 减少噪声数量以避免过度干扰
+            'wave_width': 100,  # 适当增大宽度以形成完整三角波
+            'amplitude': 5000  # 适中幅度
+        }
+
+    try:
+        if not save_dir:
+            save_dir = os.path.dirname(file_path)
+        os.makedirs(save_dir, exist_ok=True)
+
+        # 加载数据 - 使用灵活的分隔符处理
+        print(f"加载数据中... (跳过前 {skip} 行，读取 {show_samples} 行)")
+        df = pd.read_csv(file_path, sep=r'\s+', header=None,
+                         engine='python', skiprows=skip, nrows=show_samples)
+        print(f"成功加载 {len(df)} 行数据，{df.shape[1]} 列")
+
+        # 目标列：第7,8,9,12,13列 (索引6,7,8,11,12)
+        target_columns = [6, 7, 8, 11, 12]
+        column_names = {
+            6: "HX",
+            7: "HY",
+            8: "HZ",
+            11: "EX",
+            12: "EY"
+        }
+
+        # 处理每个通道
+        for col_idx in target_columns:
+            if col_idx >= df.shape[1]:
+                print(f"列索引 {col_idx} 超出范围，跳过")
+                continue
+
+            col_name = column_names.get(col_idx, f"Column {col_idx}")
+            print(f"处理通道: {col_name}")
+
+            # 转换列为数值类型
+            orig_data = pd.to_numeric(df.iloc[:, col_idx], errors='coerce')
+
+            # 填充缺失值
+            if orig_data.isna().sum() > 0:
+                median_val = orig_data.median()
+                orig_data.fillna(median_val, inplace=True)
+                print(f"  修复 {orig_data.isna().sum()} 个缺失值 (使用中值: {median_val:.1f})")
+
+            # 创建原始数据的纯曲线EPS
+            create_pure_curve_eps(
+                data=orig_data.values,
+                filename=f"{col_name}_original.eps",
+                save_dir=save_dir,
+                is_original=True
+            )
+
+            # 添加三角波噪声
+            noisy_data = add_triangle_wave_noise(orig_data.values, **wave_params)
+
+            # 创建噪声数据的纯曲线EPS
+            create_pure_curve_eps(
+                data=noisy_data,
+                filename=f"{col_name}_triangle_wave_noise.eps",
+                save_dir=save_dir,
+                is_original=False
+            )
+
+        print(f"所有通道的EPS文件已保存到: {save_dir}")
+
+    except Exception as e:
+        print(f"处理错误: {str(e)}")
+
+
+# 主程序
+if __name__ == "__main__":
+    # 配置路径
+    file_path = 'D:/LMTlongmenshan_data/yanyuan/X460/all.txt'
+    save_dir = 'D:/LMTlongmenshan_data/yanyuan/X460/triangle_wave_results'
+
+    # 用户输入
+    print("\n大地电磁数据三角波噪声处理工具 - 仅含曲线矢量图")
+    print("=" * 60)
+    print("说明: 此版本将生成仅包含数据曲线的EPS文件")
+    print("      无文本、坐标轴、网格或其他元素")
+    print("=" * 60)
+
+    try:
+        skip = int(input("输入跳过的样本数 (默认为0): ") or 0)
+        show_samples = int(input("输入处理的样本数 (默认为1000): ") or 1000)
+        n_waves = int(input("输入三角波数量 (默认为3): ") or 3)
+        wave_width = int(input("输入三角波宽度 (样本数, 默认为100): ") or 100)
+        amplitude = float(input("输入三角波幅度 (默认为5000): ") or 5000)
+
+        # 处理数据
+        process_mt_data(
+            file_path,
+            skip=skip,
+            show_samples=show_samples,
+            wave_params={
+                'n_waves': n_waves,
+                'wave_width': wave_width,
+                'amplitude': amplitude
+            },
+            save_dir=save_dir
+        )
+
+        print("\n处理完成! EPS文件已生成")
+        print(f"请检查输出目录: {save_dir}")
+        print("这些文件仅包含数据曲线本身，无其他元素")
+
+    except ValueError:
+        print("错误: 请输入有效的数字参数")
+    except Exception as e:
+        print(f"程序错误: {str(e)}")
